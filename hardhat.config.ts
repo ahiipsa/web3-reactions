@@ -1,5 +1,6 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
+import 'hardhat-abi-exporter'
 import { config as dotEnvConfig } from "dotenv";
 dotEnvConfig();
 
@@ -16,7 +17,16 @@ const config: HardhatUserConfig = {
       accounts: [process.env.PRIVATE_KEY || ''],
       chainId: 1666600000,
     },
-  }
+  },
+  abiExporter: {
+    path: './abi',
+    runOnCompile: true,
+    clear: true,
+    flat: true,
+    spacing: 2,
+    format: 'json',
+    only: ['Reactions']
+  },
 };
 
 export default config;

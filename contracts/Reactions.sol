@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.9;
 // Uncomment this line to use console.log
-// import "hardhat/console.sol";
+ import "hardhat/console.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Reactions {
+contract Reactions is Ownable {
     enum WidgetType {Single, Multi}
 
     struct Widget {
@@ -18,24 +19,36 @@ contract Reactions {
         uint256 emojiId;
     }
 
+    struct InitConfiguration {
+        uint256 reactionPrice;
+    }
 
     mapping(uint256 => address) private idToAddress;
-    mapping(address => uint256) private addressToId;
+    mapping(uint256 => uint256) private idToToValue;
 
-    function createId(address _address, uint256 _value) public returns (uint256) {
+    constructor(InitConfiguration memory _initConfig) {
+        setReactionPrice(_initConfig.reactionPrice);
+    }
+
+    function buildId(address _address, uint256 _value) public pure returns (uint256) {
         uint256 id = uint256(keccak256(abi.encodePacked(_address, _value)));
-        idToAddress[id] = _address;
-        addressToId[_address] = _value;
         return id;
+    }
+
+    function createId(address _address, uint256 _value) public {
+        uint256 id = buildId(_address, _value);
+        idToAddress[id] = _address;
+        idToToValue[id] = _value;
     }
 
     function reverseId(uint256 _id) public view returns (address, uint256) {
         address _address = idToAddress[_id];
-        uint256 _value = addressToId[_address];
+        uint256 _value = idToToValue[_id];
         return (_address, _value);
     }
 
     uint256 private widgetCounter;
+    uint256 private reactionPrice;
     mapping(address => Widget[]) private widgets;
     mapping(uint256 => Reaction[]) public widgetReactions;
 
@@ -44,10 +57,19 @@ contract Reactions {
     event ReactionChanged(address ownerAddress, uint256 widgetId, uint256 emojiId);
     event ReactionRemoved(address ownerAddress, uint256 widgetId);
 
+    function setReactionPrice(uint256 price) public onlyOwner {
+        reactionPrice = price;
+    }
+
+    function getReactionPrice() external view returns (uint256) {
+        return reactionPrice;
+    }
+
     function createWidget(WidgetType widgetType) external {
         widgetCounter++;
         uint256 index = widgets[msg.sender].length;
-        uint256 widgetId = createId(msg.sender, index);
+        uint256 widgetId = buildId(msg.sender, index);
+        createId(msg.sender, index);
         Widget memory newWidget = Widget(widgetId, msg.sender, widgetType);
 
         widgets[msg.sender].push(newWidget);
@@ -55,7 +77,10 @@ contract Reactions {
         emit WidgetCreated(widgetId, msg.sender, widgetType);
     }
 
-    function createReaction(uint256 widgetId, uint256 emojiId) external {
+    function createReaction(uint256 widgetId, uint256 emojiId) external payable {
+        uint256 receivedAmount = msg.value;
+        require(receivedAmount >= reactionPrice, "Insufficient received amount");
+
         (address addr, uint256 index) = reverseId(widgetId);
         require(widgets[addr][index].ownerAddress != address(0), "Widget does not exist");
 
@@ -63,17 +88,34 @@ contract Reactions {
         widgetReactions[widgetId].push(newReaction);
 
         emit ReactionCreated(msg.sender, widgetId, emojiId);
+
+        // Return any excess funds
+        uint256 excess = receivedAmount - reactionPrice;
+        if (excess > 0) {
+            (bool success,) = msg.sender.call{value : excess}("");
+            require(success, "cannot refund excess");
+        }
     }
 
-    function changeReaction(uint256 widgetId, uint256 emojiId) external {
+    function changeReaction(uint256 widgetId, uint256 emojiId) external payable {
+        uint256 receivedAmount = msg.value;
+        require(receivedAmount >= reactionPrice, "Insufficient received amount");
+
         (address addr, uint256 index) = reverseId(widgetId);
         require(widgets[addr][index].ownerAddress != address(0), "Widget does not exist");
         Reaction[] storage reactions = widgetReactions[widgetId];
+
+        uint256 excess = receivedAmount - reactionPrice;
+        if (excess > 0) {
+            (bool success,) = msg.sender.call{value : excess}("");
+            require(success, "cannot refund excess");
+        }
 
         for (uint256 i = 0; i < reactions.length; i++) {
             if (reactions[i].ownerAddress == msg.sender) {
                 reactions[i].emojiId = emojiId;
                 emit ReactionChanged(msg.sender, widgetId, emojiId);
+                // Return any excess funds
                 return;
             }
         }
@@ -81,14 +123,34 @@ contract Reactions {
         revert("Reaction not found");
     }
 
-    function removeReaction(uint256 widgetId) external {
+    function _removeReaction(
+        uint256 widgetId,
+        uint256 index
+    ) internal {
+        if (index >= widgetReactions[widgetId].length) return;
+
+        for (uint i = index; i < widgetReactions[widgetId].length - 1; i++) {
+            widgetReactions[widgetId][i] = widgetReactions[widgetId][i+1];
+        }
+        widgetReactions[widgetId].pop();
+    }
+
+    function removeReaction(uint256 widgetId) external payable {
+        uint256 receivedAmount = msg.value;
+        require(receivedAmount >= reactionPrice, "Insufficient received amount");
+
         (address addr, uint256 index) = reverseId(widgetId);
         require(widgets[addr][index].ownerAddress != address(0), "Widget does not exist");
         Reaction[] storage reactions = widgetReactions[widgetId];
 
+        uint256 excess = receivedAmount - reactionPrice;
+        if (excess > 0) {
+            (bool success,) = msg.sender.call{value : excess}("");
+            require(success, "cannot refund excess");
+        }
         for (uint256 i = 0; i < reactions.length; i++) {
             if (reactions[i].ownerAddress == msg.sender) {
-                delete reactions[i];
+                _removeReaction(widgetId, i);
                 emit ReactionRemoved(msg.sender, widgetId);
                 return;
             }
